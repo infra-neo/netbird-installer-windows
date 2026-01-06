@@ -105,7 +105,7 @@ $INSTALL_DIR_NAME = $InstallDirName
 $SERVICE_NAME = $ServiceName
 $WINTUN_VERSION = "0.14.1"
 $INSTALL_APP = -not $NoInstallApp
-$INSTALL_UI_FLAG = $InstallUI.IsPresent
+$INSTALL_UI_FLAG = [bool]$InstallUI
 
 # Color codes
 $ColorGreen = "Green"
