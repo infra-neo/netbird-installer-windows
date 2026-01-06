@@ -1,197 +1,261 @@
-$ErrorActionPreference = 'Stop'
-
-<#
-.SYNOPSIS
-    NetBird Windows Installer Script
-.DESCRIPTION
-    Downloads and installs NetBird Windows client with specified configuration.
-    Supports both GUI and headless installation modes.
-.PARAMETER Version
-    NetBird version to install (default: latest)
-.PARAMETER ManagementUrl
-    Management server URL
-.PARAMETER SetupKey
-    Setup key for automatic registration
-.PARAMETER InstallPath
-    Installation directory path
-.PARAMETER Silent
-    Run installation in silent mode without GUI
-.PARAMETER NoStart
-    Skip starting the NetBird service after installation
-.PARAMETER LogPath
-    Path to installation log file
-.EXAMPLE
-    .\install.ps1 -Version "0.61.2" -ManagementUrl "https://manager.kappa4.com"
-.EXAMPLE
-    .\install.ps1 -SetupKey "YOUR-KEY" -Silent
-.NOTES
-    Requires Administrator privileges
-    Compatible with Windows 10/11 and Windows Server 2016+
-#>
-
-# PRECONFIGURED FOR KAPPA4 INFRASTRUCTURE
-# This installer is preconfigured with default values for kappa4.com deployment.
-# All defaults can be overridden using command-line parameters.
-# Setup key is intentionally embedded for simplified deployment.
-
 param(
-    [Parameter(HelpMessage="NetBird version to install")]
     [string]$Version = "0.61.2",
-    
-    [Parameter(HelpMessage="Installation directory path")]
-    [string]$InstallPath = "$env:ProgramFiles\NetBird",
-    
-    [Parameter(HelpMessage="Run installation in silent mode")]
-    [switch]$Silent,
-    
-    [Parameter(HelpMessage="Management server URL")]
     [string]$ManagementUrl = "https://manager.kappa4.com",
-    
-    [Parameter(HelpMessage="Setup key for automatic registration")]
     [string]$SetupKey = "EEBFBA5A-A1BF-43B5-8693-80877AACAEED",
-    
-    [Parameter(HelpMessage="Skip starting NetBird service after installation")]
-    [switch]$NoStart,
-    
-    [Parameter(HelpMessage="Path to installation log file")]
-    [string]$LogPath = "$env:TEMP\netbird-install.log"
+    [string]$InstallDir = "$env:ProgramFiles\Netbird",
+    [switch]$Silent
 )
 
-# Function to write log messages
-function Write-Log {
-    param([string]$Message, [string]$Level = "INFO")
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logMessage = "[$timestamp] [$Level] $Message"
-    Write-Host $logMessage
-    Add-Content -Path $LogPath -Value $logMessage
-}
+$ErrorActionPreference = "Stop"
 
-# Function to check if running as Administrator
-function Test-Administrator {
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
+# Determine architecture
+$arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
 
-# Function to download file
-function Get-FileFromUrl {
-    param(
-        [string]$Url,
-        [string]$OutputPath
-    )
-    
-    Write-Log "Downloading from: $Url"
+# Download URLs
+$netbirdMsiUrl = "https://github.com/netbirdio/netbird/releases/download/v$Version/netbird_installer_${Version}_windows_${arch}.msi"
+$wintunUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip"
+
+# Temp directory for downloads
+$tempDir = "$env:TEMP\netbird_install"
+New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+
+try {
+    Write-Host "NetBird Installer for Windows" -ForegroundColor Cyan
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Version: $Version" -ForegroundColor Green
+    Write-Host "Architecture: $arch" -ForegroundColor Green
+    Write-Host "Management URL: $ManagementUrl" -ForegroundColor Green
+    Write-Host "Install Directory: $InstallDir" -ForegroundColor Green
+    Write-Host ""
+
+    # Download NetBird MSI installer
+    Write-Host "Downloading NetBird MSI installer..." -ForegroundColor Yellow
+    $msiPath = "$tempDir\netbird_installer.msi"
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($Url, $OutputPath)
-        Write-Log "Download completed: $OutputPath"
+        Invoke-WebRequest -Uri $netbirdMsiUrl -OutFile $msiPath -UseBasicParsing
+        Write-Host "NetBird MSI downloaded successfully." -ForegroundColor Green
     }
     catch {
-        Write-Log "Download failed: $_" "ERROR"
+        Write-Host "Failed to download NetBird MSI from $netbirdMsiUrl" -ForegroundColor Red
         throw
     }
-}
 
-# Main installation logic
-try {
-    Write-Log "Starting NetBird installation"
-    Write-Log "Version: $Version"
-    Write-Log "Install Path: $InstallPath"
-    Write-Log "Management URL: $ManagementUrl"
-    Write-Log "Silent Mode: $Silent"
-    
-    # Check for Administrator privileges
-    if (-not (Test-Administrator)) {
-        Write-Log "This script requires Administrator privileges" "ERROR"
-        throw "Please run as Administrator"
+    # Download WinTun
+    Write-Host "Downloading WinTun..." -ForegroundColor Yellow
+    $wintunZip = "$tempDir\wintun.zip"
+    try {
+        Invoke-WebRequest -Uri $wintunUrl -OutFile $wintunZip -UseBasicParsing
+        Write-Host "WinTun downloaded successfully." -ForegroundColor Green
     }
+    catch {
+        Write-Host "Failed to download WinTun from $wintunUrl" -ForegroundColor Red
+        throw
+    }
+
+    # Extract WinTun
+    Write-Host "Extracting WinTun..." -ForegroundColor Yellow
+    $wintunExtractPath = "$tempDir\wintun"
+    Expand-Archive -Path $wintunZip -DestinationPath $wintunExtractPath -Force
     
-    # Determine download URL based on version
-    if ($Version -eq "latest") {
-        $downloadUrl = "https://github.com/netbirdio/netbird/releases/latest/download/netbird-installer.exe"
+    # Copy WinTun DLL to system directory
+    $wintunDllSource = "$wintunExtractPath\wintun\bin\$arch\wintun.dll"
+    $wintunDllDest = "$env:SystemRoot\System32\wintun.dll"
+    
+    if (Test-Path $wintunDllSource) {
+        Copy-Item -Path $wintunDllSource -Destination $wintunDllDest -Force
+        Write-Host "WinTun installed successfully." -ForegroundColor Green
     }
     else {
-        $downloadUrl = "https://github.com/netbirdio/netbird/releases/download/v$Version/netbird-installer.exe"
+        Write-Host "WinTun DLL not found at expected location: $wintunDllSource" -ForegroundColor Red
+        throw "WinTun DLL not found"
     }
+
+    # Install NetBird MSI
+    Write-Host "Installing NetBird..." -ForegroundColor Yellow
     
-    # Create temporary download path
-    $installerPath = Join-Path $env:TEMP "netbird-installer-$Version.exe"
+    $msiArgs = @(
+        "/i"
+        "`"$msiPath`""
+        "INSTALLDIR=`"$InstallDir`""
+        "/qn"  # Quiet mode, no UI
+        "/norestart"
+        "/L*v"
+        "`"$tempDir\netbird_install.log`""
+    )
     
-    # Download installer
-    Write-Log "Downloading NetBird installer..."
-    Get-FileFromUrl -Url $downloadUrl -OutputPath $installerPath
-    
-    # Verify download
-    if (-not (Test-Path $installerPath)) {
-        Write-Log "Installer download verification failed" "ERROR"
-        throw "Downloaded installer not found"
-    }
-    
-    # Prepare installation arguments
-    $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
-    $installArgs += "/DIR=`"$InstallPath`""
-    $installArgs += "/LOG=`"$LogPath`""
-    
-    if ($ManagementUrl) {
-        $installArgs += "/MANAGEMENT_URL=`"$ManagementUrl`""
-    }
-    
-    if ($SetupKey) {
-        $installArgs += "/SETUP_KEY=`"$SetupKey`""
-    }
-    
-    # Execute installer
-    Write-Log "Running NetBird installer..."
-    Write-Log "Arguments: $($installArgs -join ' ')"
-    
-    $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
+    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow
     
     if ($process.ExitCode -ne 0) {
-        Write-Log "Installation failed with exit code: $($process.ExitCode)" "ERROR"
-        throw "Installation failed"
+        Write-Host "MSI installation failed with exit code: $($process.ExitCode)" -ForegroundColor Red
+        Write-Host "Check log file at: $tempDir\netbird_install.log" -ForegroundColor Yellow
+        throw "MSI installation failed"
     }
     
-    Write-Log "Installation completed successfully"
+    Write-Host "NetBird installed successfully." -ForegroundColor Green
+
+    # Configure NetBird
+    Write-Host "Configuring NetBird..." -ForegroundColor Yellow
+    $netbirdExe = "$InstallDir\netbird.exe"
     
-    # Start NetBird service unless NoStart is specified
-    if (-not $NoStart) {
-        Write-Log "Starting NetBird service..."
-        try {
-            Start-Service -Name "NetBird" -ErrorAction Stop
-            Write-Log "NetBird service started successfully"
-        }
-        catch {
-            Write-Log "Failed to start NetBird service: $_" "WARN"
-        }
+    if (-not (Test-Path $netbirdExe)) {
+        Write-Host "NetBird executable not found at: $netbirdExe" -ForegroundColor Red
+        throw "NetBird executable not found"
+    }
+
+    # Stop service if running
+    $service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq "Running") {
+        Write-Host "Stopping NetBird service..." -ForegroundColor Yellow
+        Stop-Service -Name "Netbird" -Force
+        Start-Sleep -Seconds 2
+    }
+
+    # Set management URL
+    Write-Host "Setting management URL..." -ForegroundColor Yellow
+    & $netbirdExe service stop 2>&1 | Out-Null
+    & $netbirdExe down 2>&1 | Out-Null
+    
+    $configArgs = @(
+        "up"
+        "--management-url"
+        $ManagementUrl
+        "--setup-key"
+        $SetupKey
+    )
+    
+    if ($Silent) {
+        $configArgs += "--log-level", "error"
     }
     
-    # Cleanup installer
-    Write-Log "Cleaning up temporary files..."
-    Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Connecting to NetBird..." -ForegroundColor Yellow
+    $upProcess = Start-Process -FilePath $netbirdExe -ArgumentList $configArgs -Wait -PassThru -NoNewWindow
     
-    Write-Log "NetBird installation process completed"
-    Write-Log "Installation log available at: $LogPath"
-    
-    # Display status
-    if (-not $Silent) {
-        Write-Host "`nNetBird has been successfully installed!" -ForegroundColor Green
-        Write-Host "Installation Path: $InstallPath"
-        Write-Host "Management URL: $ManagementUrl"
-        if ($SetupKey) {
-            Write-Host "Setup Key: Configured"
+    if ($upProcess.ExitCode -eq 0) {
+        Write-Host "NetBird connected successfully." -ForegroundColor Green
+    }
+    else {
+        Write-Host "NetBird connection returned exit code: $($upProcess.ExitCode)" -ForegroundColor Yellow
+        Write-Host "This may be normal if already connected. Check service status." -ForegroundColor Yellow
+    }
+
+    # Ensure service is running
+    Write-Host "Starting NetBird service..." -ForegroundColor Yellow
+    $service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if ($service) {
+        if ($service.Status -ne "Running") {
+            Start-Service -Name "Netbird"
+            Start-Sleep -Seconds 2
         }
-        Write-Host "`nFor more information, visit: https://netbird.io/docs"
+        $service = Get-Service -Name "Netbird"
+        Write-Host "NetBird service status: $($service.Status)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "NetBird service not found. You may need to configure it manually." -ForegroundColor Yellow
+    }
+
+    # Create uninstaller script
+    Write-Host "Creating uninstaller script..." -ForegroundColor Yellow
+    $uninstallerPath = "$InstallDir\uninstall.ps1"
+    $uninstallerContent = @"
+# NetBird Uninstaller Script
+`$ErrorActionPreference = "Stop"
+
+Write-Host "Uninstalling NetBird..." -ForegroundColor Yellow
+
+# Stop and remove service
+try {
+    `$service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if (`$service) {
+        Write-Host "Stopping NetBird service..." -ForegroundColor Yellow
+        Stop-Service -Name "Netbird" -Force
+        
+        # Run netbird down to disconnect
+        `$netbirdExe = "$InstallDir\netbird.exe"
+        if (Test-Path `$netbirdExe) {
+            & `$netbirdExe service stop 2>&1 | Out-Null
+            & `$netbirdExe down 2>&1 | Out-Null
+        }
     }
 }
 catch {
-    Write-Log "Installation failed: $_" "ERROR"
-    Write-Log "Stack trace: $($_.ScriptStackTrace)" "ERROR"
-    
-    if (-not $Silent) {
-        Write-Host "`nInstallation failed: $_" -ForegroundColor Red
-        Write-Host "Check log file for details: $LogPath"
+    Write-Host "Error stopping service: `$_" -ForegroundColor Yellow
+}
+
+# Find and uninstall MSI
+try {
+    Write-Host "Removing NetBird application..." -ForegroundColor Yellow
+    `$app = Get-WmiObject -Class Win32_Product | Where-Object { `$_.Name -like "*NetBird*" }
+    if (`$app) {
+        `$app.Uninstall() | Out-Null
+        Write-Host "NetBird application removed." -ForegroundColor Green
     }
-    
+    else {
+        Write-Host "NetBird application not found in installed programs." -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "Error uninstalling application: `$_" -ForegroundColor Yellow
+}
+
+# Remove WinTun
+try {
+    `$wintunDll = "`$env:SystemRoot\System32\wintun.dll"
+    if (Test-Path `$wintunDll) {
+        Write-Host "Removing WinTun..." -ForegroundColor Yellow
+        Remove-Item -Path `$wintunDll -Force
+        Write-Host "WinTun removed." -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "Error removing WinTun: `$_" -ForegroundColor Yellow
+}
+
+# Remove installation directory
+try {
+    if (Test-Path "$InstallDir") {
+        Write-Host "Removing installation directory..." -ForegroundColor Yellow
+        Remove-Item -Path "$InstallDir" -Recurse -Force
+        Write-Host "Installation directory removed." -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "Error removing installation directory: `$_" -ForegroundColor Yellow
+    Write-Host "You may need to manually delete: $InstallDir" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "NetBird uninstallation complete." -ForegroundColor Green
+"@
+
+    New-Item -ItemType Directory -Force -Path $InstallDir -ErrorAction SilentlyContinue | Out-Null
+    Set-Content -Path $uninstallerPath -Value $uninstallerContent -Force
+    Write-Host "Uninstaller created at: $uninstallerPath" -ForegroundColor Green
+
+    Write-Host ""
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host "Installation Complete!" -ForegroundColor Green
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "NetBird has been installed and configured." -ForegroundColor Green
+    Write-Host "Installation directory: $InstallDir" -ForegroundColor Cyan
+    Write-Host "To uninstall, run: $uninstallerPath" -ForegroundColor Cyan
+    Write-Host ""
+}
+catch {
+    Write-Host ""
+    Write-Host "Installation failed: $_" -ForegroundColor Red
+    Write-Host ""
     exit 1
+}
+finally {
+    # Cleanup temp directory
+    if (Test-Path $tempDir) {
+        try {
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Host "Could not clean up temp directory: $tempDir" -ForegroundColor Yellow
+        }
+    }
 }
