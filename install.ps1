@@ -246,8 +246,13 @@ function Show-InstallSummary {
     if ([string]::IsNullOrEmpty($SetupKey)) {
         Write-Host "(not provided)" -ForegroundColor $ColorGreen
     } else {
-        # Mask the setup key for security
-        $maskedKey = $SetupKey.Substring(0, [Math]::Min(8, $SetupKey.Length)) + "****"
+        # Mask the setup key for security - show first 4 chars max, then asterisks
+        $visibleChars = [Math]::Min(4, $SetupKey.Length)
+        if ($SetupKey.Length -le 4) {
+            $maskedKey = "****"
+        } else {
+            $maskedKey = $SetupKey.Substring(0, $visibleChars) + "****"
+        }
         Write-Host $maskedKey -ForegroundColor $ColorGreen
     }
     Write-Host "|"
@@ -410,6 +415,30 @@ function Install-Binaries {
     return $installDir
 }
 
+# Helper function for service commands with error handling
+function Invoke-ServiceCommand {
+    param(
+        [string]$NetbirdExe,
+        [string]$Command,
+        [string]$CurrentMessage,
+        [string]$SuccessMessage,
+        [string]$FallbackMessage
+    )
+    
+    Write-BoxCurrent $CurrentMessage
+    try {
+        & $NetbirdExe service $Command 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-BoxComplete $SuccessMessage
+        } else {
+            Write-BoxComplete $FallbackMessage
+        }
+    }
+    catch {
+        Write-BoxComplete $FallbackMessage
+    }
+}
+
 # Install Windows service
 function Install-Service {
     param(
@@ -424,36 +453,16 @@ function Install-Service {
 
     if ($ALREADY_INSTALLED) {
         # Stop existing service
-        Write-BoxCurrent "Stopping existing service"
-        try {
-            & $netbirdExe service stop 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                Write-BoxComplete "Service stopped successfully"
-            } else {
-                # Service might not be running, continue
-                Write-BoxComplete "Service stopped (was not running)"
-            }
-        }
-        catch {
-            # Service might not be running, continue
-            Write-BoxComplete "Service stopped (was not running)"
-        }
+        Invoke-ServiceCommand -NetbirdExe $netbirdExe -Command "stop" `
+            -CurrentMessage "Stopping existing service" `
+            -SuccessMessage "Service stopped successfully" `
+            -FallbackMessage "Service stopped (was not running)"
 
         # Uninstall existing service
-        Write-BoxCurrent "Uninstalling existing service"
-        try {
-            & $netbirdExe service uninstall 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                Write-BoxComplete "Service uninstalled successfully"
-            } else {
-                # Service might not exist, continue
-                Write-BoxComplete "Service uninstalled (was not installed)"
-            }
-        }
-        catch {
-            # Service might not exist, continue
-            Write-BoxComplete "Service uninstalled (was not installed)"
-        }
+        Invoke-ServiceCommand -NetbirdExe $netbirdExe -Command "uninstall" `
+            -CurrentMessage "Uninstalling existing service" `
+            -SuccessMessage "Service uninstalled successfully" `
+            -FallbackMessage "Service uninstalled (was not installed)"
     }
 
     # Install service
@@ -510,9 +519,13 @@ function Set-NetbirdConfiguration {
         $configArgs += $SetupKey
     }
 
+    # Note: The setup key may be visible in process lists during execution.
+    # This is a limitation of command-line tools and matches the behavior
+    # of the original bash installer.
     Write-BoxCurrent "Configuring Netbird client"
     try {
-        & $netbirdExe $configArgs
+        # Redirect output to avoid credential exposure in console
+        & $netbirdExe $configArgs 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-BoxComplete "Configuration completed successfully"
         }
