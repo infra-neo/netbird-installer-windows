@@ -326,7 +326,7 @@ function Expand-Binaries {
             # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
             $tarOutput = & tar -xzf $appArchive -C $TempDir 2>&1
             if ($LASTEXITCODE -ne 0) {
-                throw "tar extraction failed: $tarOutput"
+                throw "Failed to extract $appArchive using tar: $tarOutput. Ensure tar is available (Windows 10 1803+ or Windows Server 2019+)"
             }
             Write-BoxComplete "Extracted $APP_MAIN_NAME"
         }
@@ -342,7 +342,7 @@ function Expand-Binaries {
             # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
             $tarOutput = & tar -xzf $uiArchive -C $TempDir 2>&1
             if ($LASTEXITCODE -ne 0) {
-                throw "tar extraction failed: $tarOutput"
+                throw "Failed to extract $uiArchive using tar: $tarOutput. Ensure tar is available (Windows 10 1803+ or Windows Server 2019+)"
             }
             Write-BoxComplete "Extracted $APP_UI_NAME"
         }
