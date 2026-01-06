@@ -496,7 +496,10 @@ function Install-WinTun {
             "amd64" { "amd64" }
             "arm64" { "arm64" }
             "386"   { "x86" }
-            default { "amd64" }
+            default { 
+                Write-BoxWarning "Unknown architecture '$OS_TYPE', defaulting to amd64 for WinTun"
+                "amd64" 
+            }
         }
         
         $wintunDllSource = Join-Path $tempWintunDir "wintun\bin\$wintunArch\wintun.dll"
@@ -658,11 +661,11 @@ function New-Uninstaller {
 @echo off
 echo Uninstalling $SERVICE_NAME...
 "$InstallDir\netbird.exe" down
-timeout /t 2 /nobreak >nul
+timeout /t 5 /nobreak >nul
 "$InstallDir\netbird.exe" service stop --service-name "$SERVICE_NAME"
-timeout /t 2 /nobreak >nul
+timeout /t 5 /nobreak >nul
 "$InstallDir\netbird.exe" service uninstall --service-name "$SERVICE_NAME"
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 if exist "$InstallDir" rd /s /q "$InstallDir"
 if exist "$programDataPath" rd /s /q "$programDataPath"
 echo Uninstallation complete.
