@@ -490,14 +490,23 @@ function Install-WinTun {
         
         # Copy wintun.dll to installation directory
         Write-BoxCurrent "Installing WinTun driver"
-        $wintunDllSource = Join-Path $tempWintunDir "wintun\bin\amd64\wintun.dll"
+        
+        # Determine architecture path for WinTun
+        $wintunArch = switch ($OS_TYPE) {
+            "amd64" { "amd64" }
+            "arm64" { "arm64" }
+            "386"   { "x86" }
+            default { "amd64" }
+        }
+        
+        $wintunDllSource = Join-Path $tempWintunDir "wintun\bin\$wintunArch\wintun.dll"
         $wintunDllDest = Join-Path $InstallDir "wintun.dll"
         
         if (Test-Path $wintunDllSource) {
             Copy-Item -Path $wintunDllSource -Destination $wintunDllDest -Force -ErrorAction Stop
             Write-BoxComplete "WinTun driver installed successfully"
         } else {
-            Write-BoxWarning "WinTun DLL not found at expected location, skipping"
+            Write-BoxWarning "WinTun DLL not found at expected location ($wintunArch), skipping"
         }
     }
     catch {
@@ -654,8 +663,8 @@ timeout /t 2 /nobreak >nul
 timeout /t 2 /nobreak >nul
 "$InstallDir\netbird.exe" service uninstall --service-name "$SERVICE_NAME"
 timeout /t 2 /nobreak >nul
-rd /s /q "$InstallDir"
-rd /s /q "$programDataPath"
+if exist "$InstallDir" rd /s /q "$InstallDir"
+if exist "$programDataPath" rd /s /q "$programDataPath"
 echo Uninstallation complete.
 pause
 "@
