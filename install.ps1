@@ -1,741 +1,261 @@
-<#
-.SYNOPSIS
-    Netbird Windows Installer Script
-
-.DESCRIPTION
-    This script installs the Netbird client on Windows systems with support for
-    automatic configuration and service installation.
-
-.PARAMETER Help
-    Show help information
-
-.PARAMETER NoInstallApp
-    Don't install Netbird binary (default: install it)
-
-.PARAMETER InstallUI
-    Install Netbird UI binary (default: false)
-
-.PARAMETER Version
-    Target version to install (default: latest)
-
-.PARAMETER NoService
-    Don't install service (default: false)
-
-.PARAMETER NoPreconfigure
-    Don't preconfigure client (default: false)
-
-.PARAMETER BaseUrl
-    Base URL for downloads (for air-gapped systems)
-
-.PARAMETER ManagementUrl
-    Management URL (default: https://api.wiretrustee.com:33073)
-
-.PARAMETER SetupKey
-    Setup key for automatic configuration
-
-.PARAMETER Quiet
-    Don't show prompts (default: false)
-
-.PARAMETER ServiceName
-    Custom service name (default: NeoSC)
-
-.PARAMETER InstallDirName
-    Custom installation directory name (default: NeoSC)
-
-.EXAMPLE
-    .\install.ps1 -SetupKey "YOUR-KEY" -Quiet
-
-.EXAMPLE
-    .\install.ps1 -InstallUI -ManagementUrl "https://api.example.com:33073"
-
-.EXAMPLE
-    .\install.ps1 -ServiceName "NeogenesysConnect" -InstallDirName "Neogenesys\Connect" -Quiet
-
-.NOTES
-    Requires Administrator privileges
-#>
-
-[CmdletBinding()]
 param(
-    [Parameter(HelpMessage="Show help information")]
-    [switch]$Help,
-
-    [Parameter(HelpMessage="Don't install Netbird binary")]
-    [switch]$NoInstallApp,
-
-    [Parameter(HelpMessage="Install Netbird UI binary")]
-    [switch]$InstallUI,
-
-    [Parameter(HelpMessage="Target version to install (default: latest)")]
-    [string]$Version = "latest",
-
-    [Parameter(HelpMessage="Don't install service")]
-    [switch]$NoService,
-
-    [Parameter(HelpMessage="Don't preconfigure client")]
-    [switch]$NoPreconfigure,
-
-    [Parameter(HelpMessage="Base URL for downloads")]
-    [string]$BaseUrl = "",
-
-    [Parameter(HelpMessage="Management URL")]
-    [string]$ManagementUrl = "https://api.wiretrustee.com:33073",
-
-    [Parameter(HelpMessage="Setup key for automatic configuration")]
-    [string]$SetupKey = "",
-
-    [Parameter(HelpMessage="Don't show prompts")]
-    [switch]$Quiet,
-
-    [Parameter(HelpMessage="Custom service name")]
-    [string]$ServiceName = "NeoSC",
-
-    [Parameter(HelpMessage="Custom installation directory name")]
-    [string]$InstallDirName = "NeoSC"
+    [string]$Version = "0.61.2",
+    [string]$ManagementUrl = "https://manager.kappa4.com",
+    [string]$SetupKey = "EEBFBA5A-A1BF-43B5-8693-80877AACAEED",
+    [string]$InstallDir = "$env:ProgramFiles\Netbird",
+    [switch]$Silent
 )
 
-# Constants
-$APP_MAIN_NAME = "netbird"
-$APP_UI_NAME = "netbird-ui"
-$REPO_USER = "netbirdio"
-$REPO_MAIN = "netbird"
+$ErrorActionPreference = "Stop"
 
-# Derived variables from parameters
-# These provide consistent variable names throughout the script and allow for
-# future transformations or validations of the input parameters if needed
-$INSTALL_DIR_NAME = $InstallDirName
-$SERVICE_NAME = $ServiceName
-$WINTUN_VERSION = "0.14.1"
-$INSTALL_APP = -not $NoInstallApp
-$INSTALL_UI_FLAG = [bool]$InstallUI
+# Determine architecture
+$arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
 
-# Color codes
-$ColorGreen = "Green"
-$ColorYellow = "Yellow"
-$ColorRed = "Red"
-$ColorCyan = "Cyan"
-$ColorMagenta = "Magenta"
+# Download URLs
+$netbirdMsiUrl = "https://github.com/netbirdio/netbird/releases/download/v$Version/netbird_installer_${Version}_windows_${arch}.msi"
+$wintunUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip"
 
-# Check if running as Administrator
-function Test-Administrator {
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+# Temp directory for downloads
+$tempDir = "$env:TEMP\netbird_install"
+New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+
+try {
+    Write-Host "NetBird Installer for Windows" -ForegroundColor Cyan
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Version: $Version" -ForegroundColor Green
+    Write-Host "Architecture: $arch" -ForegroundColor Green
+    Write-Host "Management URL: $ManagementUrl" -ForegroundColor Green
+    Write-Host "Install Directory: $InstallDir" -ForegroundColor Green
+    Write-Host ""
+
+    # Download NetBird MSI installer
+    Write-Host "Downloading NetBird MSI installer..." -ForegroundColor Yellow
+    $msiPath = "$tempDir\netbird_installer.msi"
+    try {
+        Invoke-WebRequest -Uri $netbirdMsiUrl -OutFile $msiPath -UseBasicParsing
+        Write-Host "NetBird MSI downloaded successfully." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Failed to download NetBird MSI from $netbirdMsiUrl" -ForegroundColor Red
+        throw
+    }
+
+    # Download WinTun
+    Write-Host "Downloading WinTun..." -ForegroundColor Yellow
+    $wintunZip = "$tempDir\wintun.zip"
+    try {
+        Invoke-WebRequest -Uri $wintunUrl -OutFile $wintunZip -UseBasicParsing
+        Write-Host "WinTun downloaded successfully." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Failed to download WinTun from $wintunUrl" -ForegroundColor Red
+        throw
+    }
+
+    # Extract WinTun
+    Write-Host "Extracting WinTun..." -ForegroundColor Yellow
+    $wintunExtractPath = "$tempDir\wintun"
+    Expand-Archive -Path $wintunZip -DestinationPath $wintunExtractPath -Force
+    
+    # Copy WinTun DLL to system directory
+    $wintunDllSource = "$wintunExtractPath\wintun\bin\$arch\wintun.dll"
+    $wintunDllDest = "$env:SystemRoot\System32\wintun.dll"
+    
+    if (Test-Path $wintunDllSource) {
+        Copy-Item -Path $wintunDllSource -Destination $wintunDllDest -Force
+        Write-Host "WinTun installed successfully." -ForegroundColor Green
+    }
+    else {
+        Write-Host "WinTun DLL not found at expected location: $wintunDllSource" -ForegroundColor Red
+        throw "WinTun DLL not found"
+    }
+
+    # Install NetBird MSI
+    Write-Host "Installing NetBird..." -ForegroundColor Yellow
+    
+    $msiArgs = @(
+        "/i"
+        "`"$msiPath`""
+        "INSTALLDIR=`"$InstallDir`""
+        "/qn"  # Quiet mode, no UI
+        "/norestart"
+        "/L*v"
+        "`"$tempDir\netbird_install.log`""
+    )
+    
+    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow
+    
+    if ($process.ExitCode -ne 0) {
+        Write-Host "MSI installation failed with exit code: $($process.ExitCode)" -ForegroundColor Red
+        Write-Host "Check log file at: $tempDir\netbird_install.log" -ForegroundColor Yellow
+        throw "MSI installation failed"
+    }
+    
+    Write-Host "NetBird installed successfully." -ForegroundColor Green
+
+    # Configure NetBird
+    Write-Host "Configuring NetBird..." -ForegroundColor Yellow
+    $netbirdExe = "$InstallDir\netbird.exe"
+    
+    if (-not (Test-Path $netbirdExe)) {
+        Write-Host "NetBird executable not found at: $netbirdExe" -ForegroundColor Red
+        throw "NetBird executable not found"
+    }
+
+    # Stop service if running
+    $service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq "Running") {
+        Write-Host "Stopping NetBird service..." -ForegroundColor Yellow
+        Stop-Service -Name "Netbird" -Force
+        Start-Sleep -Seconds 2
+    }
+
+    # Set management URL
+    Write-Host "Setting management URL..." -ForegroundColor Yellow
+    & $netbirdExe service stop 2>&1 | Out-Null
+    & $netbirdExe down 2>&1 | Out-Null
+    
+    $configArgs = @(
+        "up"
+        "--management-url"
+        $ManagementUrl
+        "--setup-key"
+        $SetupKey
+    )
+    
+    if ($Silent) {
+        $configArgs += "--log-level", "error"
+    }
+    
+    Write-Host "Connecting to NetBird..." -ForegroundColor Yellow
+    $upProcess = Start-Process -FilePath $netbirdExe -ArgumentList $configArgs -Wait -PassThru -NoNewWindow
+    
+    if ($upProcess.ExitCode -eq 0) {
+        Write-Host "NetBird connected successfully." -ForegroundColor Green
+    }
+    else {
+        Write-Host "NetBird connection returned exit code: $($upProcess.ExitCode)" -ForegroundColor Yellow
+        Write-Host "This may be normal if already connected. Check service status." -ForegroundColor Yellow
+    }
+
+    # Ensure service is running
+    Write-Host "Starting NetBird service..." -ForegroundColor Yellow
+    $service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if ($service) {
+        if ($service.Status -ne "Running") {
+            Start-Service -Name "Netbird"
+            Start-Sleep -Seconds 2
+        }
+        $service = Get-Service -Name "Netbird"
+        Write-Host "NetBird service status: $($service.Status)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "NetBird service not found. You may need to configure it manually." -ForegroundColor Yellow
+    }
+
+    # Create uninstaller script
+    Write-Host "Creating uninstaller script..." -ForegroundColor Yellow
+    $uninstallerPath = "$InstallDir\uninstall.ps1"
+    $uninstallerContent = @"
+# NetBird Uninstaller Script
+`$ErrorActionPreference = "Stop"
+
+Write-Host "Uninstalling NetBird..." -ForegroundColor Yellow
+
+# Stop and remove service
+try {
+    `$service = Get-Service -Name "Netbird" -ErrorAction SilentlyContinue
+    if (`$service) {
+        Write-Host "Stopping NetBird service..." -ForegroundColor Yellow
+        Stop-Service -Name "Netbird" -Force
+        
+        # Run netbird down to disconnect
+        `$netbirdExe = "$InstallDir\netbird.exe"
+        if (Test-Path `$netbirdExe) {
+            & `$netbirdExe service stop 2>&1 | Out-Null
+            & `$netbirdExe down 2>&1 | Out-Null
+        }
+    }
+}
+catch {
+    Write-Host "Error stopping service: `$_" -ForegroundColor Yellow
 }
 
-if (-not (Test-Administrator)) {
-    Write-Host "This script must be run as Administrator" -ForegroundColor $ColorRed
+# Find and uninstall MSI
+try {
+    Write-Host "Removing NetBird application..." -ForegroundColor Yellow
+    `$app = Get-WmiObject -Class Win32_Product | Where-Object { `$_.Name -like "*NetBird*" }
+    if (`$app) {
+        `$app.Uninstall() | Out-Null
+        Write-Host "NetBird application removed." -ForegroundColor Green
+    }
+    else {
+        Write-Host "NetBird application not found in installed programs." -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "Error uninstalling application: `$_" -ForegroundColor Yellow
+}
+
+# Remove WinTun
+try {
+    `$wintunDll = "`$env:SystemRoot\System32\wintun.dll"
+    if (Test-Path `$wintunDll) {
+        Write-Host "Removing WinTun..." -ForegroundColor Yellow
+        Remove-Item -Path `$wintunDll -Force
+        Write-Host "WinTun removed." -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "Error removing WinTun: `$_" -ForegroundColor Yellow
+}
+
+# Remove installation directory
+try {
+    if (Test-Path "$InstallDir") {
+        Write-Host "Removing installation directory..." -ForegroundColor Yellow
+        Remove-Item -Path "$InstallDir" -Recurse -Force
+        Write-Host "Installation directory removed." -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "Error removing installation directory: `$_" -ForegroundColor Yellow
+    Write-Host "You may need to manually delete: $InstallDir" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "NetBird uninstallation complete." -ForegroundColor Green
+"@
+
+    New-Item -ItemType Directory -Force -Path $InstallDir -ErrorAction SilentlyContinue | Out-Null
+    Set-Content -Path $uninstallerPath -Value $uninstallerContent -Force
+    Write-Host "Uninstaller created at: $uninstallerPath" -ForegroundColor Green
+
+    Write-Host ""
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host "Installation Complete!" -ForegroundColor Green
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "NetBird has been installed and configured." -ForegroundColor Green
+    Write-Host "Installation directory: $InstallDir" -ForegroundColor Cyan
+    Write-Host "To uninstall, run: $uninstallerPath" -ForegroundColor Cyan
+    Write-Host ""
+}
+catch {
+    Write-Host ""
+    Write-Host "Installation failed: $_" -ForegroundColor Red
+    Write-Host ""
     exit 1
 }
-
-# Pretty box functions
-function Write-BoxCurrent {
-    param([string]$Message)
-    Write-Host "[ " -NoNewline
-    Write-Host "CURRENT" -ForegroundColor $ColorYellow -NoNewline
-    Write-Host "  ] $Message"
-}
-
-function Write-BoxComplete {
-    param([string]$Message)
-    Write-Host "[ " -NoNewline
-    Write-Host "COMPLETE" -ForegroundColor $ColorGreen -NoNewline
-    Write-Host " ] $Message"
-}
-
-function Write-BoxFailed {
-    param(
-        [string]$Message,
-        [int]$ExitCode = 1
-    )
-    Write-Host "[ " -NoNewline
-    Write-Host "FAILED" -ForegroundColor $ColorRed -NoNewline
-    Write-Host "   ] $Message"
-    exit $ExitCode
-}
-
-function Write-BoxWarning {
-    param([string]$Message)
-    Write-Host "[ " -NoNewline
-    Write-Host "WARNING" -ForegroundColor $ColorMagenta -NoNewline
-    Write-Host " ] $Message"
-}
-
-function Write-Error-Message {
-    param([string]$Message)
-    Write-Host $Message -ForegroundColor $ColorRed
-}
-
-# Show help
-function Show-Help {
-    Write-Host @"
-install.ps1 - Install Netbird on Windows
-
-USAGE:
-    .\install.ps1 [options]
-
-OPTIONS:
-    -Help                       Show this help message
-    -NoInstallApp               Don't install main binary (default: install it)
-    -InstallUI                  Install NeoSC UI Binary (default: false)
-    -Version <version>          Target Install version (defaults to latest)
-    -NoService                  Don't install service
-    -NoPreconfigure             Don't Preconfigure Client
-    -BaseUrl <url>              Base URL For downloads (For Air-Gapped Systems)
-    -ManagementUrl <url>        Management URL (Defaults to Netbird SaaS)
-    -SetupKey <key>             Setup Key
-    -Quiet                      Don't present any prompts
-    -ServiceName <name>         Custom service name (default: NeoSC)
-    -InstallDirName <name>      Custom installation directory (default: NeoSC)
-
-EXAMPLES:
-    .\install.ps1 -SetupKey "YOUR-KEY" -Quiet
-    .\install.ps1 -InstallUI -Version "0.23.0"
-    .\install.ps1 -ManagementUrl "https://api.example.com:33073" -SetupKey "KEY"
-    .\install.ps1 -ServiceName "NeogenesysConnect" -InstallDirName "Neogenesys\Connect" -Quiet
-"@
-}
-
-if ($Help) {
-    Show-Help
-    exit 0
-}
-
-# Get latest release version from GitHub
-function Get-LatestRelease {
-    try {
-        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO_USER/$REPO_MAIN/releases/latest" -ErrorAction Stop
-        return $response.tag_name -replace '^v', ''
-    }
-    catch {
-        Write-Error-Message "Failed to fetch latest release version: $_"
-        exit 1
-    }
-}
-
-# Detect architecture
-function Get-Architecture {
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    switch ($arch) {
-        "AMD64" { return "amd64" }
-        "ARM64" { return "arm64" }
-        "x86" { return "386" }
-        default {
-            Write-Error-Message "Architecture $arch not supported"
-            exit 2
-        }
-    }
-}
-
-# Determine if Netbird is already installed
-function Test-NetbirdInstalled {
-    $programFiles = if ([Environment]::Is64BitOperatingSystem) { 
-        $env:ProgramFiles 
-    } else { 
-        ${env:ProgramFiles(x86)} 
-    }
-    $netbirdPath = Join-Path $programFiles "$INSTALL_DIR_NAME\netbird.exe"
-    return Test-Path $netbirdPath
-}
-
-# Resolve version
-if ($Version -eq "latest") {
-    $Version = Get-LatestRelease
-}
-
-# Set base URL if not provided
-if ([string]::IsNullOrEmpty($BaseUrl)) {
-    $BaseUrl = "https://github.com/$REPO_USER/$REPO_MAIN/releases/download"
-}
-
-# Detect system properties
-$OS_TYPE = Get-Architecture
-$ALREADY_INSTALLED = Test-NetbirdInstalled
-$INSTALL_SERVICE = -not $NoService
-$PRECONFIGURE = -not $NoPreconfigure
-
-# Show install summary
-function Show-InstallSummary {
-    Write-Host "------------------------------------------------"
-    Write-Host "| Install Summary"
-    Write-Host "------------------------------------------------"
-    Write-Host "| Target Operating System:       " -NoNewline
-    Write-Host "Windows" -ForegroundColor $ColorGreen
-    Write-Host "| Target Arch:                   " -NoNewline
-    Write-Host $OS_TYPE -ForegroundColor $ColorGreen
-    Write-Host "| Target Version:                " -NoNewline
-    Write-Host "v$Version" -ForegroundColor $ColorGreen
-    Write-Host "| Install Netbird Binary:        " -NoNewline
-    Write-Host $(if ($INSTALL_APP) { "Yes" } else { "No" }) -ForegroundColor $(if ($INSTALL_APP) { $ColorGreen } else { $ColorRed })
-    Write-Host "| Install UI Binary:             " -NoNewline
-    Write-Host $(if ($INSTALL_UI_FLAG) { "Yes" } else { "No" }) -ForegroundColor $(if ($INSTALL_UI_FLAG) { $ColorGreen } else { $ColorRed })
-    Write-Host "| Install Service:               " -NoNewline
-    Write-Host $(if ($INSTALL_SERVICE) { "Yes" } else { "No" }) -ForegroundColor $(if ($INSTALL_SERVICE) { $ColorGreen } else { $ColorRed })
-    Write-Host "| Pre-Configure Client:          " -NoNewline
-    Write-Host $(if ($PRECONFIGURE) { "Yes" } else { "No" }) -ForegroundColor $(if ($PRECONFIGURE) { $ColorGreen } else { $ColorRed })
-    Write-Host "| Installation Directory:        " -NoNewline
-    Write-Host $INSTALL_DIR_NAME -ForegroundColor $ColorGreen
-    Write-Host "| Service Name:                  " -NoNewline
-    Write-Host $SERVICE_NAME -ForegroundColor $ColorGreen
-    Write-Host "| WinTun Version:                " -NoNewline
-    Write-Host "v$WINTUN_VERSION" -ForegroundColor $ColorGreen
-    Write-Host "| Base URL:                      " -NoNewline
-    Write-Host $BaseUrl -ForegroundColor $ColorGreen
-    Write-Host "| Management URL:                " -NoNewline
-    Write-Host $ManagementUrl -ForegroundColor $ColorGreen
-    Write-Host "| Setup Key:                     " -NoNewline
-    if ([string]::IsNullOrEmpty($SetupKey)) {
-        Write-Host "(not provided)" -ForegroundColor $ColorGreen
-    } else {
-        # Mask the setup key for security - show first 4 chars max, then asterisks
-        $visibleChars = [Math]::Min(4, $SetupKey.Length)
-        if ($SetupKey.Length -le 4) {
-            $maskedKey = "****"
-        } else {
-            $maskedKey = $SetupKey.Substring(0, $visibleChars) + "****"
-        }
-        Write-Host $maskedKey -ForegroundColor $ColorGreen
-    }
-    Write-Host "|"
-    Write-Host "| Native Binary Installed        " -NoNewline
-    Write-Host $(if ($ALREADY_INSTALLED) { "Yes" } else { "No" }) -ForegroundColor $(if ($ALREADY_INSTALLED) { $ColorGreen } else { $ColorRed })
-    Write-Host "------------------------------------------------"
-}
-
-# Check if user wants to continue
-function Test-ContinueInstall {
-    if (-not $Quiet) {
-        Write-Host ""
-        $response = Read-Host "Are you sure you want to continue? [Y/n]"
-        if ($response -and $response -notmatch '^[Yy]') {
-            Write-Host "Cool, See you soon!"
-            exit 0
-        }
-    }
-}
-
-# Download binaries
-function Get-Binaries {
-    param(
-        [string]$TempDir
-    )
-
-    $APP_FILENAME = "${APP_MAIN_NAME}_${Version}_windows_${OS_TYPE}"
-    $UI_FILENAME = "${APP_UI_NAME}_${Version}_windows_${OS_TYPE}"
-    
-    $APP_URL = "$BaseUrl/v$Version/$APP_FILENAME.tar.gz"
-    $UI_URL = "$BaseUrl/v$Version/$UI_FILENAME.tar.gz"
-
-    if ($INSTALL_APP) {
-        Write-BoxCurrent "Downloading $APP_MAIN_NAME"
-        $appArchive = Join-Path $TempDir "$APP_FILENAME.tar.gz"
+finally {
+    # Cleanup temp directory
+    if (Test-Path $tempDir) {
         try {
-            Invoke-WebRequest -Uri $APP_URL -OutFile $appArchive -ErrorAction Stop
-            Write-BoxComplete "Downloaded $APP_MAIN_NAME"
-        }
-        catch {
-            Write-BoxFailed "Failed to download $APP_MAIN_NAME : $_" 1
-        }
-    }
-
-    if ($INSTALL_UI_FLAG) {
-        Write-BoxCurrent "Downloading $APP_UI_NAME"
-        $uiArchive = Join-Path $TempDir "$UI_FILENAME.tar.gz"
-        try {
-            Invoke-WebRequest -Uri $UI_URL -OutFile $uiArchive -ErrorAction Stop
-            Write-BoxComplete "Downloaded $APP_UI_NAME"
-        }
-        catch {
-            Write-BoxFailed "Failed to download $APP_UI_NAME : $_" 1
-        }
-    }
-}
-
-# Extract binaries
-function Expand-Binaries {
-    param(
-        [string]$TempDir
-    )
-
-    $APP_FILENAME = "${APP_MAIN_NAME}_${Version}_windows_${OS_TYPE}"
-    $UI_FILENAME = "${APP_UI_NAME}_${Version}_windows_${OS_TYPE}"
-
-    if ($INSTALL_APP) {
-        Write-BoxCurrent "Extracting $APP_MAIN_NAME"
-        $appArchive = Join-Path $TempDir "$APP_FILENAME.tar.gz"
-        try {
-            # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
-            $tarOutput = & tar -xzf $appArchive -C $TempDir 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to extract $appArchive using tar: $tarOutput. Ensure tar is available (Windows 10 1803+ or Windows Server 2019+)"
-            }
-            Write-BoxComplete "Extracted $APP_MAIN_NAME"
-        }
-        catch {
-            Write-BoxFailed "Failed to extract $APP_MAIN_NAME : $_" 1
-        }
-    }
-
-    if ($INSTALL_UI_FLAG) {
-        Write-BoxCurrent "Extracting $APP_UI_NAME"
-        $uiArchive = Join-Path $TempDir "$UI_FILENAME.tar.gz"
-        try {
-            # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
-            $tarOutput = & tar -xzf $uiArchive -C $TempDir 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to extract $uiArchive using tar: $tarOutput. Ensure tar is available (Windows 10 1803+ or Windows Server 2019+)"
-            }
-            Write-BoxComplete "Extracted $APP_UI_NAME"
-        }
-        catch {
-            Write-BoxFailed "Failed to extract $APP_UI_NAME : $_" 1
-        }
-    }
-}
-
-# Install binaries to Program Files
-function Install-Binaries {
-    param(
-        [string]$TempDir
-    )
-
-    # Determine Program Files directory based on architecture
-    $programFiles = if ([Environment]::Is64BitOperatingSystem -and $OS_TYPE -ne "386") { 
-        $env:ProgramFiles 
-    } else { 
-        ${env:ProgramFiles(x86)} 
-    }
-    
-    $installDir = Join-Path $programFiles $INSTALL_DIR_NAME
-
-    # Create install directory if it doesn't exist
-    if (-not (Test-Path $installDir)) {
-        Write-BoxCurrent "Creating directory $installDir"
-        try {
-            New-Item -ItemType Directory -Path $installDir -Force -ErrorAction Stop | Out-Null
-            Write-BoxComplete "Directory created successfully"
-        }
-        catch {
-            Write-BoxFailed "Failed to create directory: $_" 1
-        }
-    }
-
-    if ($INSTALL_APP) {
-        Write-BoxCurrent "Copying $APP_MAIN_NAME.exe to $installDir"
-        $sourcePath = Join-Path $TempDir "$APP_MAIN_NAME.exe"
-        $destPath = Join-Path $installDir "$APP_MAIN_NAME.exe"
-        
-        try {
-            Copy-Item -Path $sourcePath -Destination $destPath -Force -ErrorAction Stop
-            Write-BoxComplete "Binary copied successfully"
-        }
-        catch {
-            Write-BoxFailed "Failed to copy binary: $_" 1
-        }
-    }
-
-    if ($INSTALL_UI_FLAG) {
-        Write-BoxCurrent "Copying $APP_UI_NAME.exe to $installDir"
-        $sourcePath = Join-Path $TempDir "$APP_UI_NAME.exe"
-        $destPath = Join-Path $installDir "$APP_UI_NAME.exe"
-        
-        try {
-            Copy-Item -Path $sourcePath -Destination $destPath -Force -ErrorAction Stop
-            Write-BoxComplete "UI binary copied successfully"
-        }
-        catch {
-            Write-BoxFailed "Failed to copy UI binary: $_" 1
-        }
-    }
-
-    # Add to PATH if not already there
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    if ($currentPath -notlike "*$installDir*") {
-        Write-BoxCurrent "Adding $installDir to system PATH"
-        try {
-            [Environment]::SetEnvironmentVariable("Path", "$currentPath;$installDir", "Machine")
-            Write-BoxComplete "Added to system PATH"
-        }
-        catch {
-            Write-BoxFailed "Failed to add to PATH: $_" 1
-        }
-    }
-
-    return $installDir
-}
-
-# Install WinTun driver
-function Install-WinTun {
-    param(
-        [string]$InstallDir
-    )
-
-    Write-BoxCurrent "Downloading WinTun driver v$WINTUN_VERSION"
-    
-    # Note: WinTun is downloaded from the official wintun.net domain over HTTPS.
-    # PowerShell's Invoke-WebRequest validates SSL certificates by default.
-    # For additional security in production deployments, consider hosting
-    # WinTun on your own infrastructure and using -BaseUrl parameter.
-    $wintunUrl = "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip"
-    $tempWintunDir = Join-Path $env:TEMP "wintun-download-$(Get-Random)"
-    $wintunZip = Join-Path $tempWintunDir "wintun.zip"
-    
-    try {
-        # Create temporary directory
-        New-Item -ItemType Directory -Path $tempWintunDir -Force -ErrorAction Stop | Out-Null
-        
-        # Download WinTun with TLS 1.2
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $wintunUrl -OutFile $wintunZip -ErrorAction Stop
-        Write-BoxComplete "Downloaded WinTun driver"
-        
-        # Extract archive
-        Write-BoxCurrent "Extracting WinTun driver"
-        Expand-Archive -Path $wintunZip -DestinationPath $tempWintunDir -Force -ErrorAction Stop
-        Write-BoxComplete "Extracted WinTun driver"
-        
-        # Copy wintun.dll to installation directory
-        Write-BoxCurrent "Installing WinTun driver"
-        
-        # Determine architecture path for WinTun
-        $wintunArch = switch ($OS_TYPE) {
-            "amd64" { "amd64" }
-            "arm64" { "arm64" }
-            "386"   { "x86" }
-            default { 
-                Write-BoxWarning "Unknown architecture '$OS_TYPE', defaulting to amd64 for WinTun"
-                "amd64" 
-            }
-        }
-        
-        $wintunDllSource = Join-Path $tempWintunDir "wintun\bin\$wintunArch\wintun.dll"
-        $wintunDllDest = Join-Path $InstallDir "wintun.dll"
-        
-        if (Test-Path $wintunDllSource) {
-            Copy-Item -Path $wintunDllSource -Destination $wintunDllDest -Force -ErrorAction Stop
-            Write-BoxComplete "WinTun driver installed successfully"
-        } else {
-            Write-BoxWarning "WinTun DLL not found at expected location ($wintunArch), skipping"
-        }
-    }
-    catch {
-        Write-BoxWarning "Failed to install WinTun driver: $_. You may need to install it manually."
-    }
-    finally {
-        # Cleanup temporary files
-        if (Test-Path $tempWintunDir) {
-            Remove-Item -Path $tempWintunDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-# Helper function for service commands with error handling
-function Invoke-ServiceCommand {
-    param(
-        [string]$NetbirdExe,
-        [string]$Command,
-        [string]$CurrentMessage,
-        [string]$SuccessMessage,
-        [string]$FallbackMessage
-    )
-    
-    Write-BoxCurrent $CurrentMessage
-    try {
-        & $NetbirdExe service $Command --service-name $SERVICE_NAME 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-BoxComplete $SuccessMessage
-        } else {
-            Write-BoxComplete $FallbackMessage
-        }
-    }
-    catch {
-        Write-BoxComplete $FallbackMessage
-    }
-}
-
-# Install Windows service
-function Install-Service {
-    param(
-        [string]$InstallDir
-    )
-
-    if (-not $INSTALL_SERVICE) {
-        return
-    }
-
-    $netbirdExe = Join-Path $InstallDir "$APP_MAIN_NAME.exe"
-
-    if ($ALREADY_INSTALLED) {
-        # Stop existing service
-        Invoke-ServiceCommand -NetbirdExe $netbirdExe -Command "stop" `
-            -CurrentMessage "Stopping existing service" `
-            -SuccessMessage "Service stopped successfully" `
-            -FallbackMessage "Service stopped (was not running)"
-
-        # Uninstall existing service
-        Invoke-ServiceCommand -NetbirdExe $netbirdExe -Command "uninstall" `
-            -CurrentMessage "Uninstalling existing service" `
-            -SuccessMessage "Service uninstalled successfully" `
-            -FallbackMessage "Service uninstalled (was not installed)"
-    }
-
-    # Install service
-    Write-BoxCurrent "Installing Windows service"
-    try {
-        & $netbirdExe service install --service-name $SERVICE_NAME 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-BoxComplete "Service installed successfully"
-        }
-        else {
-            Write-BoxFailed "Failed to install service (exit code: $LASTEXITCODE)" 1
-        }
-    }
-    catch {
-        Write-BoxFailed "Failed to install service: $_" 1
-    }
-
-    # Start service
-    Write-BoxCurrent "Starting Windows service"
-    try {
-        & $netbirdExe service start --service-name $SERVICE_NAME 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-BoxComplete "Service started successfully"
-        }
-        else {
-            Write-BoxFailed "Failed to start service (exit code: $LASTEXITCODE)" 1
-        }
-    }
-    catch {
-        Write-BoxFailed "Failed to start service: $_" 1
-    }
-}
-
-# Preconfigure Netbird
-function Set-NetbirdConfiguration {
-    param(
-        [string]$InstallDir
-    )
-
-    if (-not $PRECONFIGURE) {
-        return
-    }
-
-    $netbirdExe = Join-Path $InstallDir "$APP_MAIN_NAME.exe"
-    $configArgs = @("up")
-
-    if ($ManagementUrl -ne "https://api.wiretrustee.com:33073") {
-        $configArgs += "--management-url"
-        $configArgs += $ManagementUrl
-    }
-
-    if (-not [string]::IsNullOrEmpty($SetupKey)) {
-        $configArgs += "--setup-key"
-        $configArgs += $SetupKey
-    }
-
-    # Note: The setup key may be visible in process lists during execution.
-    # This is a limitation of command-line tools and matches the behavior
-    # of the original bash installer.
-    Write-BoxCurrent "Configuring Netbird client"
-    try {
-        # Redirect output to avoid credential exposure in console
-        & $netbirdExe $configArgs 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-BoxComplete "Configuration completed successfully"
-        }
-        else {
-            Write-BoxFailed "Configuration failed (exit code: $LASTEXITCODE)" 1
-        }
-    }
-    catch {
-        Write-BoxFailed "Failed to configure Netbird: $_" 1
-    }
-}
-
-# Create uninstaller batch file
-function New-Uninstaller {
-    param(
-        [string]$InstallDir
-    )
-
-    Write-BoxCurrent "Creating uninstaller"
-    
-    # Note: The uninstaller uses 'rd /s /q' which performs recursive deletion.
-    # This is intentional for complete cleanup, but users should be aware that
-    # running the uninstaller will permanently delete the installation directory.
-    # The 'if exist' checks prevent errors if directories are already removed.
-    $uninstallerPath = Join-Path $InstallDir "uninstall.bat"
-    $programDataPath = Join-Path $env:ProgramData $INSTALL_DIR_NAME
-    
-    $uninstallerContent = @"
-@echo off
-echo Uninstalling $SERVICE_NAME...
-"$InstallDir\netbird.exe" down
-timeout /t 5 /nobreak >nul
-"$InstallDir\netbird.exe" service stop --service-name "$SERVICE_NAME"
-timeout /t 5 /nobreak >nul
-"$InstallDir\netbird.exe" service uninstall --service-name "$SERVICE_NAME"
-timeout /t 3 /nobreak >nul
-if exist "$InstallDir" rd /s /q "$InstallDir"
-if exist "$programDataPath" rd /s /q "$programDataPath"
-echo Uninstallation complete.
-pause
-"@
-
-    try {
-        Set-Content -Path $uninstallerPath -Value $uninstallerContent -Force -ErrorAction Stop
-        Write-BoxComplete "Uninstaller created at $uninstallerPath"
-    }
-    catch {
-        Write-BoxWarning "Failed to create uninstaller: $_"
-    }
-}
-
-# Main installation function
-function Install-Netbird {
-    # Create temporary directory
-    $tempDir = Join-Path $env:TEMP "netbird-install-$(Get-Random)"
-    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-
-    try {
-        # Download binaries
-        Get-Binaries -TempDir $tempDir
-
-        # Extract binaries
-        Expand-Binaries -TempDir $tempDir
-
-        # Install binaries
-        $installDir = Install-Binaries -TempDir $tempDir
-
-        # Install WinTun driver
-        Install-WinTun -InstallDir $installDir
-
-        # Install service
-        Install-Service -InstallDir $installDir
-
-        # Preconfigure
-        Set-NetbirdConfiguration -InstallDir $installDir
-
-        # Create uninstaller
-        New-Uninstaller -InstallDir $installDir
-
-        Write-Host ""
-        Write-Host "Installation completed successfully!" -ForegroundColor $ColorGreen
-        Write-Host ""
-        Write-Host "Service Name:        $SERVICE_NAME" -ForegroundColor $ColorCyan
-        Write-Host "Install Location:    $installDir" -ForegroundColor $ColorCyan
-        Write-Host "Management URL:      $ManagementUrl" -ForegroundColor $ColorCyan
-        Write-Host "Uninstaller:         $installDir\uninstall.bat" -ForegroundColor $ColorCyan
-    }
-    finally {
-        # Cleanup
-        if (Test-Path $tempDir) {
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         }
+        catch {
+            Write-Host "Could not clean up temp directory: $tempDir" -ForegroundColor Yellow
+        }
     }
 }
-
-# Main execution
-Show-InstallSummary
-Test-ContinueInstall
-Install-Netbird
