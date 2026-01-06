@@ -243,7 +243,13 @@ function Show-InstallSummary {
     Write-Host "| Management URL:                " -NoNewline
     Write-Host $ManagementUrl -ForegroundColor $ColorGreen
     Write-Host "| Setup Key:                     " -NoNewline
-    Write-Host $SetupKey -ForegroundColor $ColorGreen
+    if ([string]::IsNullOrEmpty($SetupKey)) {
+        Write-Host "(not provided)" -ForegroundColor $ColorGreen
+    } else {
+        # Mask the setup key for security
+        $maskedKey = $SetupKey.Substring(0, [Math]::Min(8, $SetupKey.Length)) + "****"
+        Write-Host $maskedKey -ForegroundColor $ColorGreen
+    }
     Write-Host "|"
     Write-Host "| Native Binary Installed        " -NoNewline
     Write-Host $(if ($ALREADY_INSTALLED) { "Yes" } else { "No" }) -ForegroundColor $(if ($ALREADY_INSTALLED) { $ColorGreen } else { $ColorRed })
@@ -421,7 +427,12 @@ function Install-Service {
         Write-BoxCurrent "Stopping existing service"
         try {
             & $netbirdExe service stop 2>&1 | Out-Null
-            Write-BoxComplete "Service stopped successfully"
+            if ($LASTEXITCODE -eq 0) {
+                Write-BoxComplete "Service stopped successfully"
+            } else {
+                # Service might not be running, continue
+                Write-BoxComplete "Service stopped (was not running)"
+            }
         }
         catch {
             # Service might not be running, continue
@@ -432,7 +443,12 @@ function Install-Service {
         Write-BoxCurrent "Uninstalling existing service"
         try {
             & $netbirdExe service uninstall 2>&1 | Out-Null
-            Write-BoxComplete "Service uninstalled successfully"
+            if ($LASTEXITCODE -eq 0) {
+                Write-BoxComplete "Service uninstalled successfully"
+            } else {
+                # Service might not exist, continue
+                Write-BoxComplete "Service uninstalled (was not installed)"
+            }
         }
         catch {
             # Service might not exist, continue
