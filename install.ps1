@@ -282,14 +282,14 @@ function Get-Binaries {
     $APP_FILENAME = "${APP_MAIN_NAME}_${Version}_windows_${OS_TYPE}"
     $UI_FILENAME = "${APP_UI_NAME}_${Version}_windows_${OS_TYPE}"
     
-    $APP_URL = "$BaseUrl/v$Version/$APP_FILENAME.zip"
-    $UI_URL = "$BaseUrl/v$Version/$UI_FILENAME.zip"
+    $APP_URL = "$BaseUrl/v$Version/$APP_FILENAME.tar.gz"
+    $UI_URL = "$BaseUrl/v$Version/$UI_FILENAME.tar.gz"
 
     if ($InstallApp) {
         Write-BoxCurrent "Downloading $APP_MAIN_NAME"
-        $appZip = Join-Path $TempDir "$APP_FILENAME.zip"
+        $appArchive = Join-Path $TempDir "$APP_FILENAME.tar.gz"
         try {
-            Invoke-WebRequest -Uri $APP_URL -OutFile $appZip -ErrorAction Stop
+            Invoke-WebRequest -Uri $APP_URL -OutFile $appArchive -ErrorAction Stop
             Write-BoxComplete "Downloaded $APP_MAIN_NAME"
         }
         catch {
@@ -299,9 +299,9 @@ function Get-Binaries {
 
     if ($InstallUI) {
         Write-BoxCurrent "Downloading $APP_UI_NAME"
-        $uiZip = Join-Path $TempDir "$UI_FILENAME.zip"
+        $uiArchive = Join-Path $TempDir "$UI_FILENAME.tar.gz"
         try {
-            Invoke-WebRequest -Uri $UI_URL -OutFile $uiZip -ErrorAction Stop
+            Invoke-WebRequest -Uri $UI_URL -OutFile $uiArchive -ErrorAction Stop
             Write-BoxComplete "Downloaded $APP_UI_NAME"
         }
         catch {
@@ -321,9 +321,13 @@ function Expand-Binaries {
 
     if ($InstallApp) {
         Write-BoxCurrent "Extracting $APP_MAIN_NAME"
-        $appZip = Join-Path $TempDir "$APP_FILENAME.zip"
+        $appArchive = Join-Path $TempDir "$APP_FILENAME.tar.gz"
         try {
-            Expand-Archive -Path $appZip -DestinationPath $TempDir -Force -ErrorAction Stop
+            # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
+            $tarOutput = & tar -xzf $appArchive -C $TempDir 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "tar extraction failed: $tarOutput"
+            }
             Write-BoxComplete "Extracted $APP_MAIN_NAME"
         }
         catch {
@@ -333,9 +337,13 @@ function Expand-Binaries {
 
     if ($InstallUI) {
         Write-BoxCurrent "Extracting $APP_UI_NAME"
-        $uiZip = Join-Path $TempDir "$UI_FILENAME.zip"
+        $uiArchive = Join-Path $TempDir "$UI_FILENAME.tar.gz"
         try {
-            Expand-Archive -Path $uiZip -DestinationPath $TempDir -Force -ErrorAction Stop
+            # Use tar command (available in Windows 10 1803+ and Windows Server 2019+)
+            $tarOutput = & tar -xzf $uiArchive -C $TempDir 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "tar extraction failed: $tarOutput"
+            }
             Write-BoxComplete "Extracted $APP_UI_NAME"
         }
         catch {
