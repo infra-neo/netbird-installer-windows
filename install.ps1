@@ -101,6 +101,8 @@ $REPO_USER = "netbirdio"
 $REPO_MAIN = "netbird"
 
 # Derived variables from parameters
+# These provide consistent variable names throughout the script and allow for
+# future transformations or validations of the input parameters if needed
 $INSTALL_DIR_NAME = $InstallDirName
 $SERVICE_NAME = $ServiceName
 $WINTUN_VERSION = "0.14.1"
@@ -470,6 +472,10 @@ function Install-WinTun {
 
     Write-BoxCurrent "Downloading WinTun driver v$WINTUN_VERSION"
     
+    # Note: WinTun is downloaded from the official wintun.net domain over HTTPS.
+    # PowerShell's Invoke-WebRequest validates SSL certificates by default.
+    # For additional security in production deployments, consider hosting
+    # WinTun on your own infrastructure and using -BaseUrl parameter.
     $wintunUrl = "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip"
     $tempWintunDir = Join-Path $env:TEMP "wintun-download-$(Get-Random)"
     $wintunZip = Join-Path $tempWintunDir "wintun.zip"
@@ -654,6 +660,10 @@ function New-Uninstaller {
 
     Write-BoxCurrent "Creating uninstaller"
     
+    # Note: The uninstaller uses 'rd /s /q' which performs recursive deletion.
+    # This is intentional for complete cleanup, but users should be aware that
+    # running the uninstaller will permanently delete the installation directory.
+    # The 'if exist' checks prevent errors if directories are already removed.
     $uninstallerPath = Join-Path $InstallDir "uninstall.bat"
     $programDataPath = Join-Path $env:ProgramData $INSTALL_DIR_NAME
     
